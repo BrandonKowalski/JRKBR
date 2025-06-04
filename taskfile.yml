@@ -1,9 +1,33 @@
 version: '3'
 
 tasks:
-
+  # Standard build using cross-compilation tools
   build:
     cmds:
       - rm jrkbr > /dev/null 2>&1 || true
-      - GOOS=linux GOARCH=arm64 go build -o jrkbr jerry.go
+      - GOOS=linux GOARCH=arm64 CGO_ENABLED=1 CC=aarch64-linux-gnu-gcc go build -o jrkbr -ldflags "-linkmode external -extldflags '-static'" jerry.go
+      - GOOS=linux GOARCH=arm64 CGO_ENABLED=1 CC=aarch64-linux-gnu-gcc go build -o color_tester -ldflags "-linkmode external -extldflags '-static'" color_tester.go
     silent: true
+
+  # Build using Docker for proper OpenCV support on arm64
+  docker-build:
+    cmds:
+      # Create output directory if it doesn't exist
+      - mkdir -p ./build
+      # Build the Docker image
+      - docker build -t jrkbr-arm64-builder .
+      # Run the container to build the binaries
+      - docker run --rm -v "$(pwd)":/app -v "$(pwd)/build":/output jrkbr-arm64-builder sh -c "GOOS=linux GOARCH=arm64 CGO_ENABLED=1 CC=aarch64-linux-gnu-gcc go build -o /output/jrkbr -ldflags '-linkmode external -extldflags -static' jerry.go && GOOS=linux GOARCH=arm64 CGO_ENABLED=1 CC=aarch64-linux-gnu-gcc go build -o /output/color_tester -ldflags '-linkmode external -extldflags -static' color_tester.go"
+      # Show the results
+      - echo "Build complete. Binaries are located in the ./build directory"
+    silent: false
+
+  # Deploy to Raspberry Pi (requires setting PI_HOST environment variable)
+  deploy:
+    deps: [docker-build]
+    cmds:
+      - echo "Deploying to Raspberry Pi at $PI_HOST"
+      - scp ./build/jrkbr ./build/color_tester pi@$PI_HOST:/home/pi/
+    silent: false
+    requires:
+      vars: [PI_HOST]

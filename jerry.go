@@ -3,155 +3,16 @@ package main
 import (
 	"fmt"
 	"html/template"
+	"jrkbr/lib"
 	"log"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"go.bug.st/serial"
+	"gocv.io/x/gocv"
 )
-
-const (
-	StraightRadius int16 = 32767
-)
-
-type RoombaCommands struct {
-	CmdStart   byte
-	CmdControl byte
-	CmdSafe    byte
-	CmdFull    byte
-	CmdPower   byte
-	CmdSpot    byte
-	CmdClean   byte
-	CmdMax     byte
-	CmdDrive   byte
-	CmdMotors  byte
-	CmdLeds    byte
-	CmdDock    byte
-}
-
-type Roomba struct {
-	port     serial.Port
-	portName string
-	baudRate int
-	Cmds     RoombaCommands
-}
-
-func NewRoomba(portName string, baudRate int) *Roomba {
-	return &Roomba{
-		portName: portName,
-		baudRate: baudRate,
-		Cmds: RoombaCommands{
-			CmdStart:   128, // Start command
-			CmdControl: 130, // Control mode
-			CmdSafe:    131, // Safe mode
-			CmdFull:    132, // Full control mode
-			CmdPower:   133, // Power down
-			CmdSpot:    134, // Spot cleaning
-			CmdClean:   135, // Normal cleaning
-			CmdMax:     136, // Maximum cleaning
-			CmdDrive:   137, // Control wheels
-			CmdMotors:  138, // Control motors
-			CmdLeds:    139, // Control LEDs
-			CmdDock:    143, // Dock the robot
-		},
-	}
-}
-
-func (r *Roomba) Connect() error {
-	// Set up the serial port
-	mode := &serial.Mode{
-		BaudRate: r.baudRate,
-		Parity:   serial.NoParity,
-		DataBits: 8,
-		StopBits: serial.OneStopBit,
-	}
-
-	// Open the port
-	port, err := serial.Open(r.portName, mode)
-	if err != nil {
-		return fmt.Errorf("failed to open serial port: %v", err)
-	}
-	r.port = port
-
-	// Reset the Roomba by toggling RTS (if supported)
-	// Note: This may not work on all serial adapters
-	// If you can't use RTS control, you might need to use a hardware solution
-	r.port.SetRTS(false)
-	time.Sleep(100 * time.Millisecond)
-	r.port.SetRTS(true)
-	time.Sleep(2 * time.Second)
-
-	return nil
-}
-
-func (r *Roomba) Close() error {
-	if r.port != nil {
-		return r.port.Close()
-	}
-	return nil
-}
-
-func (r *Roomba) sendCommand(cmd byte) error {
-	_, err := r.port.Write([]byte{cmd})
-	time.Sleep(100 * time.Millisecond) // Give the Roomba time to process
-	return err
-}
-
-func (r *Roomba) Start() error {
-	return r.sendCommand(r.Cmds.CmdStart)
-}
-
-func (r *Roomba) Control() error {
-	return r.sendCommand(r.Cmds.CmdControl)
-}
-
-func (r *Roomba) SafeMode() error {
-	return r.sendCommand(r.Cmds.CmdSafe)
-}
-
-func (r *Roomba) FullMode() error {
-	return r.sendCommand(r.Cmds.CmdFull)
-}
-
-func (r *Roomba) Clean() error {
-	return r.sendCommand(r.Cmds.CmdClean)
-}
-
-func (r *Roomba) SpotClean() error {
-	return r.sendCommand(r.Cmds.CmdSpot)
-}
-
-func (r *Roomba) MaxClean() error {
-	return r.sendCommand(r.Cmds.CmdMax)
-}
-
-func (r *Roomba) Dock() error {
-	return r.sendCommand(r.Cmds.CmdDock)
-}
-
-func (r *Roomba) PowerOff() error {
-	return r.sendCommand(r.Cmds.CmdPower)
-}
-
-// Drive controls the Roomba's movement
-// velocity: -500 to 500 mm/s
-// radius: -2000 to 2000 mm, special cases: 32768=straight, 1=clockwise, -1=counterclockwise
-func (r *Roomba) Drive(velocity int16, radius int16) error {
-	command := []byte{
-		r.Cmds.CmdDrive,
-		byte(velocity >> 8),   // Velocity high byte
-		byte(velocity & 0xFF), // Velocity low byte
-		byte(radius >> 8),     // Radius high byte
-		byte(radius & 0xFF),   // Radius low byte
-	}
-	_, err := r.port.Write(command)
-	return err
-}
-
-func (r *Roomba) Stop() error {
-	return r.Drive(0, 0)
-}
 
 const htmlTemplate = `
 <!DOCTYPE html>
@@ -230,6 +91,17 @@ const htmlTemplate = `
             width: 100%;
             margin: 10px 0;
         }
+        .color-select {
+            margin-top: 10px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .color-select select {
+            margin: 10px 0;
+            padding: 8px;
+            font-size: 16px;
+        }
     </style>
 </head>
 <body>
@@ -264,6 +136,17 @@ const htmlTemplate = `
         <button class="function-button" id="powerBtn">Power Off</button>
     </div>
     
+    <div class="color-select">
+        <label for="colorSelect">Select Color to Track:</label>
+        <select id="colorSelect">
+            <option value="green">Green</option>
+            <option value="red">Red</option>
+            <option value="blue">Blue</option>
+            <option value="yellow">Yellow</option>
+        </select>
+        <button class="function-button" id="seekColorBtn">Seek & Follow Color</button>
+    </div>
+    
     <script>
         function updateSpeedValue(val) {
             document.getElementById('speedValue').textContent = val;
@@ -273,12 +156,22 @@ const htmlTemplate = `
             const speed = document.getElementById('speed').value;
             const statusElement = document.getElementById('status');
             
-            fetch('/control', {
+            let url = '/control';
+            let body = 'command=' + command + '&speed=' + speed;
+            
+            // Add color parameter for seekColor command
+            if (command === 'seekColor') {
+                const color = document.getElementById('colorSelect').value;
+                body += '&color=' + color;
+                url = '/seekColor';
+            }
+            
+            fetch(url, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded',
                 },
-                body: 'command=' + command + '&speed=' + speed
+                body: body
             })
             .then(response => response.text())
             .then(data => {
@@ -330,11 +223,259 @@ const htmlTemplate = `
             document.getElementById('powerBtn').addEventListener('click', function() {
                 sendCommand('power');
             });
+            
+            document.getElementById('seekColorBtn').addEventListener('click', function() {
+                sendCommand('seekColor');
+            });
         });
     </script>
 </body>
 </html>
 `
+
+// ColorSeekState represents the current state of the color seeking process
+type ColorSeekState string
+
+const (
+	Spinning  ColorSeekState = "SPINNING"  // Looking for color by spinning
+	Centering ColorSeekState = "CENTERING" // Centering the detected color
+	Following ColorSeekState = "FOLLOWING" // Following the color
+	Stopped   ColorSeekState = "STOPPED"   // Stopped (color lost or finished)
+)
+
+// ColorSeekConfig holds configuration for color seeking behavior
+type ColorSeekConfig struct {
+	// Speed settings
+	SpinSpeed       int16
+	ForwardSpeed    int16
+	AdjustmentSpeed int16
+
+	// Timing settings
+	UpdateInterval   time.Duration
+	LostColorTimeout time.Duration
+
+	// Color detection settings
+	DetectorConfig lib.ColorDetectionConfig
+}
+
+// DefaultColorSeekConfig returns a default configuration for color seeking
+func DefaultColorSeekConfig() ColorSeekConfig {
+	return ColorSeekConfig{
+		SpinSpeed:        100, // Speed for spinning to find color
+		ForwardSpeed:     150, // Speed for moving forward
+		AdjustmentSpeed:  80,  // Speed for adjusting position
+		UpdateInterval:   50 * time.Millisecond,
+		LostColorTimeout: 2 * time.Second,
+		DetectorConfig:   lib.DefaultColorDetectionConfig(),
+	}
+}
+
+// ColorSeeker manages the behavior of seeking and following a specific color
+type ColorSeeker struct {
+	config        ColorSeekConfig
+	colorDetector *lib.ColorDetector
+	roomba        *lib.Roomba
+	running       bool
+	stopChan      chan struct{}
+	state         ColorSeekState
+	lastColorSeen time.Time
+	mu            sync.RWMutex
+}
+
+// NewColorSeeker creates a new color seeker with the given configuration
+func NewColorSeeker(config ColorSeekConfig, roomba *lib.Roomba) (*ColorSeeker, error) {
+	detector, err := lib.NewColorDetector(config.DetectorConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ColorSeeker{
+		config:        config,
+		colorDetector: detector,
+		roomba:        roomba,
+		running:       false,
+		stopChan:      make(chan struct{}),
+		state:         Stopped,
+		lastColorSeen: time.Time{},
+	}, nil
+}
+
+// Start begins the color seeking behavior
+func (cs *ColorSeeker) Start() {
+	cs.mu.Lock()
+	if cs.running {
+		cs.mu.Unlock()
+		return
+	}
+	cs.running = true
+	cs.mu.Unlock()
+
+	// Start the color detector
+	cs.colorDetector.Start()
+
+	// Start in spinning state
+	cs.state = Spinning
+	cs.roomba.Drive(cs.config.SpinSpeed, -1) // Start spinning clockwise
+
+	// Start the control loop
+	go cs.controlLoop()
+}
+
+// Stop halts the color seeking behavior
+func (cs *ColorSeeker) Stop() {
+	cs.mu.Lock()
+	if !cs.running {
+		cs.mu.Unlock()
+		return
+	}
+	cs.running = false
+	cs.mu.Unlock()
+
+	close(cs.stopChan)
+
+	// Stop the color detector
+	cs.colorDetector.Stop()
+
+	// Stop the Roomba
+	if cs.roomba != nil {
+		cs.roomba.Stop()
+	}
+
+	cs.state = Stopped
+}
+
+// Close releases all resources
+func (cs *ColorSeeker) Close() {
+	cs.Stop()
+	cs.colorDetector.Close()
+}
+
+// GetColorDetector returns the underlying color detector
+func (cs *ColorSeeker) GetColorDetector() *lib.ColorDetector {
+	return cs.colorDetector
+}
+
+// GetCurrentState returns the current state of the color seeker
+func (cs *ColorSeeker) GetCurrentState() ColorSeekState {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.state
+}
+
+// SetColorRange allows changing the color being detected
+func (cs *ColorSeeker) SetColorRange(lowerHSV, upperHSV gocv.Scalar) {
+	cs.colorDetector.Config.LowerHSVBound = lowerHSV
+	cs.colorDetector.Config.UpperHSVBound = upperHSV
+}
+
+// controlLoop is the main control loop for color seeking
+func (cs *ColorSeeker) controlLoop() {
+	ticker := time.NewTicker(cs.config.UpdateInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-cs.stopChan:
+			return
+		case <-ticker.C:
+			position := cs.colorDetector.GetPosition()
+			cs.updateMovement(position)
+		}
+	}
+}
+
+// updateMovement controls the Roomba based on the detected color position
+func (cs *ColorSeeker) updateMovement(position lib.LinePosition) {
+	var err error
+	var newState ColorSeekState
+
+	cs.mu.RLock()
+	currentState := cs.state
+	cs.mu.RUnlock()
+
+	switch position {
+	case lib.LineNotFound:
+		// Color not found
+		if currentState == Following || currentState == Centering {
+			// We were following but lost the color
+			if time.Since(cs.lastColorSeen) > cs.config.LostColorTimeout {
+				// If we've lost the color for too long, stop
+				log.Println("Color lost for too long - Stopping")
+				err = cs.roomba.Stop()
+				newState = Stopped
+			} else {
+				// Keep the current state for a bit hoping to find the color again
+				newState = currentState
+			}
+		} else if currentState == Spinning {
+			// Keep spinning to find the color
+			err = cs.roomba.Drive(cs.config.SpinSpeed, -1) // Continue spinning clockwise
+			log.Println("Spinning to find color")
+			newState = Spinning
+		} else {
+			newState = currentState
+		}
+	case lib.LineCentered:
+		// Color is centered
+		cs.lastColorSeen = time.Now()
+
+		if currentState == Spinning || currentState == Centering {
+			// Transition to following state
+			newState = Following
+			log.Println("Color CENTERED - Moving forward")
+		} else {
+			newState = currentState
+		}
+
+		// Move forward with the color centered
+		err = cs.roomba.Drive(cs.config.ForwardSpeed, lib.StraightRadius)
+
+	case lib.LineLeft:
+		// Color is to the left
+		cs.lastColorSeen = time.Now()
+
+		if currentState == Spinning {
+			// Found the color, transition to centering
+			newState = Centering
+		} else {
+			newState = currentState
+		}
+
+		// Turn left to center the color
+		err = cs.roomba.Drive(cs.config.AdjustmentSpeed, 1) // Turn counter-clockwise
+		log.Println("Color LEFT - Turning left to center")
+
+	case lib.LineRight:
+		// Color is to the right
+		cs.lastColorSeen = time.Now()
+
+		if currentState == Spinning {
+			// Found the color, transition to centering
+			newState = Centering
+		} else {
+			newState = currentState
+		}
+
+		// Turn right to center the color
+		err = cs.roomba.Drive(cs.config.AdjustmentSpeed, -1) // Turn clockwise
+		log.Println("Color RIGHT - Turning right to center")
+	}
+
+	if err != nil {
+		log.Printf("Error controlling Roomba: %v", err)
+	}
+
+	// Update the state if it changed
+	if newState != "" && newState != currentState {
+		cs.mu.Lock()
+		cs.state = newState
+		cs.mu.Unlock()
+	}
+}
+
+// Global variable to store the active color seeker
+var activeSeeker *ColorSeeker
+var seekerMutex sync.Mutex
 
 func main() {
 	ports, err := serial.GetPortsList()
@@ -349,7 +490,7 @@ func main() {
 
 	portName := "/dev/ttyUSB0"
 
-	roomba := NewRoomba(portName, 115200)
+	roomba := lib.NewRoomba(portName, 115200)
 
 	err = roomba.Connect()
 	if err != nil {
@@ -421,11 +562,11 @@ func main() {
 		switch command {
 		case "forward":
 			log.Printf("Executing forward command with speed %d", speedInt16)
-			err = roomba.Drive(speedInt16, StraightRadius)
+			err = roomba.Drive(speedInt16, lib.StraightRadius)
 			response = "Moving forward"
 		case "backward":
 			log.Printf("Executing backward command with speed %d", speedInt16)
-			err = roomba.Drive(-speedInt16, StraightRadius)
+			err = roomba.Drive(-speedInt16, lib.StraightRadius)
 			response = "Moving backward"
 		case "left":
 			log.Printf("Executing left command with speed %d", speedInt16)
@@ -439,6 +580,14 @@ func main() {
 			log.Printf("Executing stop command")
 			err = roomba.Stop()
 			response = "Stopped"
+
+			// Also stop any active color seeker
+			seekerMutex.Lock()
+			if activeSeeker != nil {
+				activeSeeker.Stop()
+				activeSeeker = nil
+			}
+			seekerMutex.Unlock()
 		case "clean":
 			log.Printf("Executing clean command")
 			err = roomba.Clean()
@@ -476,6 +625,78 @@ func main() {
 		fmt.Fprint(w, response)
 	})
 
-	fmt.Println("Starting web server on http://localhost:8080")
+	// Add handler for color seeking
+	http.HandleFunc("/seekColor", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Parse form data
+		err := r.ParseForm()
+		if err != nil {
+			http.Error(w, "Failed to parse form data", http.StatusBadRequest)
+			return
+		}
+
+		// Get color to seek - default to green if not specified
+		colorName := r.FormValue("color")
+		if colorName == "" {
+			colorName = "green"
+		}
+
+		log.Printf("Seeking color: %s", colorName)
+
+		// Stop any existing color seeker
+		seekerMutex.Lock()
+		if activeSeeker != nil {
+			activeSeeker.Stop()
+			activeSeeker = nil
+		}
+
+		// Create color seeker config
+		config := DefaultColorSeekConfig()
+
+		// Set color range based on requested color
+		switch colorName {
+		case "red":
+			// Red is special in HSV as it wraps around
+			// Lower range (0-10)
+			config.DetectorConfig.LowerHSVBound = gocv.NewScalar(0, 100, 100, 0)
+			config.DetectorConfig.UpperHSVBound = gocv.NewScalar(10, 255, 255, 0)
+		case "blue":
+			config.DetectorConfig.LowerHSVBound = gocv.NewScalar(100, 100, 100, 0)
+			config.DetectorConfig.UpperHSVBound = gocv.NewScalar(130, 255, 255, 0)
+		case "yellow":
+			config.DetectorConfig.LowerHSVBound = gocv.NewScalar(20, 100, 100, 0)
+			config.DetectorConfig.UpperHSVBound = gocv.NewScalar(30, 255, 255, 0)
+		default: // Green
+			config.DetectorConfig.LowerHSVBound = gocv.NewScalar(35, 100, 100, 0)
+			config.DetectorConfig.UpperHSVBound = gocv.NewScalar(50, 255, 255, 0)
+		}
+
+		// Create and start the color seeker
+		seeker, err := NewColorSeeker(config, roomba)
+		if err != nil {
+			log.Printf("Error creating color seeker: %v", err)
+			seekerMutex.Unlock()
+			http.Error(w, fmt.Sprintf("Error: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		// Store the active seeker
+		activeSeeker = seeker
+		seekerMutex.Unlock()
+
+		// Start the seeker
+		seeker.Start()
+
+		response := fmt.Sprintf("Seeking %s color", colorName)
+		log.Println(response)
+		fmt.Fprint(w, response)
+	})
+
+	localIP := lib.GetLocalIP()
+	fmt.Printf("Starting web server on http://%s:8080\n", localIP)
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
