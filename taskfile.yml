@@ -1,0 +1,9 @@
+version: '3'
+
+tasks:
+
+  build:
+    cmds:
+      - rm jrkbr > /dev/null 2>&1 || true
+      - GOOS=linux GOARCH=arm64 go build -o jrkbr jerry.go
+    silent: true
