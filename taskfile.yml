@@ -4,10 +4,12 @@ tasks:
   # Standard build using cross-compilation tools
   build:
     cmds:
-      - rm jrkbr > /dev/null 2>&1 || true
-      - GOOS=linux GOARCH=arm64 CGO_ENABLED=1 CC=aarch64-linux-gnu-gcc go build -o jrkbr -ldflags "-linkmode external -extldflags '-static'" jerry.go
-      - GOOS=linux GOARCH=arm64 CGO_ENABLED=1 CC=aarch64-linux-gnu-gcc go build -o color_tester -ldflags "-linkmode external -extldflags '-static'" color_tester.go
-    silent: true
+      - rm -f jrkbr color_tester || true
+      - GOOS=linux GOARCH=arm64 CGO_ENABLED=1 CC=aarch64-linux-gnu-gcc go build -o jrkbr jerry.go
+      - GOOS=linux GOARCH=arm64 CGO_ENABLED=1 CC=aarch64-linux-gnu-gcc go build -o color_tester color_tester.go
+      # If this builds successfully, copy to the output directory if it exists
+      - if [ -d "./build" ]; then cp jrkbr color_tester ./build/; fi
+    silent: false
 
   # Build using Docker for proper OpenCV support on arm64
   docker-build:
@@ -16,8 +18,16 @@ tasks:
       - mkdir -p ./build
       # Build the Docker image
       - docker build -t jrkbr-arm64-builder .
-      # Run the container to build the binaries
-      - docker run --rm -v "$(pwd)":/app -v "$(pwd)/build":/output jrkbr-arm64-builder sh -c "GOOS=linux GOARCH=arm64 CGO_ENABLED=1 CC=aarch64-linux-gnu-gcc go build -o /output/jrkbr -ldflags '-linkmode external -extldflags -static' jerry.go && GOOS=linux GOARCH=arm64 CGO_ENABLED=1 CC=aarch64-linux-gnu-gcc go build -o /output/color_tester -ldflags '-linkmode external -extldflags -static' color_tester.go"
+      # Run the container to build the binaries and copy them to the host
+      - >
+        docker run --rm 
+        -v "$(pwd)":/app 
+        -v "$(pwd)/build":/build 
+        jrkbr-arm64-builder 
+        sh -c "cd /app && 
+        go mod download && 
+        GOOS=linux GOARCH=arm64 CGO_ENABLED=1 CC=aarch64-linux-gnu-gcc go build -o /build/jrkbr jerry.go && 
+        GOOS=linux GOARCH=arm64 CGO_ENABLED=1 CC=aarch64-linux-gnu-gcc go build -o /build/color_tester color_tester.go"
       # Show the results
       - echo "Build complete. Binaries are located in the ./build directory"
     silent: false
@@ -27,7 +37,5 @@ tasks:
     deps: [docker-build]
     cmds:
       - echo "Deploying to Raspberry Pi at $PI_HOST"
-      - scp ./build/jrkbr ./build/color_tester pi@$PI_HOST:/home/pi/
+      - scp ./build/jrkbr ./build/color_tester btk@192.168.1.29:/home/btk/Projects/jrkbr
     silent: false
-    requires:
-      vars: [PI_HOST]

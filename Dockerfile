@@ -12,16 +12,15 @@ RUN apt-get update && apt-get install -y \
     libavcodec-dev \
     libavformat-dev \
     libswscale-dev \
-    libtbb2 \
     libtbb-dev \
     libjpeg-dev \
     libpng-dev \
     libtiff-dev
 
-# Set up OpenCV
+# Set up OpenCV - using v4.11.0 which is compatible with gocv v0.41.0
 WORKDIR /tmp
-RUN git clone --depth 1 --branch 4.8.0 https://github.com/opencv/opencv.git && \
-    git clone --depth 1 --branch 4.8.0 https://github.com/opencv/opencv_contrib.git
+RUN git clone --depth 1 --branch 4.11.0 https://github.com/opencv/opencv.git && \
+    git clone --depth 1 --branch 4.11.0 https://github.com/opencv/opencv_contrib.git
 
 # Build OpenCV for ARM64
 WORKDIR /tmp/opencv/build
@@ -50,5 +49,8 @@ ENV CGO_LDFLAGS="-L/usr/local/opencv-arm64/lib -lopencv_core -lopencv_face -lope
 WORKDIR /app
 COPY . .
 
-# Build the application
-CMD ["go", "run", "tasks.go", "build"]
+# Install task runner
+RUN go install github.com/go-task/task/v3/cmd/task@latest
+
+# Update the entry point to use the task runner
+CMD ["/go/bin/task", "build"]

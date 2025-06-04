@@ -40,7 +40,8 @@ Whelp, here goes nothing!
 - Steel flat bars with holes x2
 - Chafing dishes that can hold two half pans x2
 - Custom 3D printed parts
-    - GoPro style mount for the webcam
+    - [GoPro style mount](resources/stl/webcam_gopro_style_mount.stl) for the webcam
+        - Modified [this fantastic STL](https://www.printables.com/model/294317-gopro-mount-on-3d-printer-frame)
     - Brackets to attach flat bar rails to the Roomba
     - Brackets to attach chafing dishes to flat bar
     - Brackets to attach the screen to the flat bar
@@ -59,3 +60,8 @@ Whelp, here goes nothing!
 With this setup the Roomba will rotate until the painter tape is in view, center the tape in the frame, follow the tape
 and then stop when it reaches the end of the tape.
 
+---
+
+## Configuring the Pi
+
+1. [Install OpenCV Binaries](https://github.com/prepkg/opencv-raspberrypi)
