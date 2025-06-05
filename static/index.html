@@ -1,152 +1,331 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Jerry</title>
+    <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jerry</title>
     <style>
-        body {
+        * {
             margin: 0;
             padding: 0;
-            overflow: hidden;
+            box-sizing: border-box;
+        }
+
+        body {
             background-color: #222;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
             font-family: Arial, sans-serif;
+            overflow: hidden;
             touch-action: manipulation;
             user-select: none;
             -webkit-tap-highlight-color: transparent;
-            height: 100vh;
-            width: 100vw;
         }
 
-        #cat-container {
-            position: absolute;
-            top: 0;
-            left: 0;
+        .cat-container {
+            position: relative;
+            width: 100vh;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .cat-face {
+            margin-top: 150px;
+            position: relative;
             width: 100%;
             height: 100%;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
         }
 
-        #cat-face {
-            width: 70vmin;
-            height: 70vmin;
-            background-color: #fff;
-            border-radius: 50%;
-            position: relative;
-            display: flex;
-            justify-content: center;
-            align-items: center;
+        /* Eyebrows */
+        .eyebrow {
+            position: absolute;
+            width: 15%;
+            height: 4%;
+            background-color: white;
+            border-radius: 50px;
+            transition: all 0.5s ease;
+            top: 16%;
         }
 
-        .eyes {
-            display: flex;
-            justify-content: space-between;
-            width: 50%;
+        .eyebrow.left {
+            left: 20%;
         }
 
+        .eyebrow.right {
+            right: 20%;
+        }
+
+        .eyebrow.raised.left {
+            transform: rotate(-12deg) translateY(-8px);
+        }
+
+        .eyebrow.raised.right {
+            transform: rotate(12deg) translateY(-8px);
+        }
+
+        .eyebrow.sad.left {
+            transform: rotate(12deg) translateY(4px);
+        }
+
+        .eyebrow.sad.right {
+            transform: rotate(-12deg) translateY(4px);
+        }
+
+        /* Eyes */
         .eye {
-            width: 10vmin;
-            height: 16vmin;
-            background-color: #000;
+            position: absolute;
+            width: 20%;
+            height: 20%;
+            border: 4px solid white;
             border-radius: 50%;
-            display: flex;
-            justify-content: center;
-            align-items: center;
+            background-color: black;
+            top: 24%;
+            transition: all 0.5s ease;
+            overflow: hidden;
+        }
+
+        .eye.left {
+            left: 16%;
+        }
+
+        .eye.right {
+            right: 16%;
+        }
+
+        .eye.wide {
+            transform: scale(1.1);
+        }
+
+        .eye.wink {
+            height: 2px;
+            border-radius: 50px;
+            border-top: none;
+            border-bottom: 4px solid white;
         }
 
         .pupil {
-            width: 5vmin;
-            height: 5vmin;
-            background-color: #fff;
+            position: absolute;
+            width: 40%;
+            height: 40%;
+            background-color: #3e92cc; /* Blue eyes for Ragdoll */
             border-radius: 50%;
-            position: relative;
+            top: 15%;
+            left: 15%;
+            transition: transform 0.15s ease;
         }
 
+        .pupil.blink {
+            transform: scaleY(0);
+        }
+
+        .highlight {
+            position: absolute;
+            width: 25%;
+            height: 25%;
+            background-color: white;
+            border-radius: 50%;
+            bottom: 20%;
+            right: 20%;
+        }
+
+        /* Spiral eyes for dizzy expression */
+        .spiral {
+            position: absolute;
+            width: 80%;
+            height: 80%;
+            border: 4px solid white;
+            border-radius: 50%;
+            top: 10%;
+            left: 10%;
+        }
+
+        .spiral.left {
+            animation: spin-slow 3s linear infinite;
+        }
+
+        .spiral.right {
+            animation: spin-slow-reverse 3s linear infinite;
+        }
+
+        .spiral::before {
+            content: '';
+            position: absolute;
+            width: 20%;
+            height: 20%;
+            background-color: white;
+            border-radius: 50%;
+            top: 5%;
+            left: 5%;
+        }
+
+        .spiral::after {
+            content: '';
+            position: absolute;
+            width: 15%;
+            height: 15%;
+            background-color: white;
+            border-radius: 50%;
+            bottom: 5%;
+            right: 5%;
+        }
+
+        /* Nose */
+        .nose {
+            position: absolute;
+            width: 2%;
+            height: 2%;
+            background-color: #ffc0cb; /* Pink nose */
+            border-radius: 50%;
+            top: 44%;
+            left: 50%;
+            transform: translateX(-50%);
+        }
+
+        /* Mouth */
         .mouth {
             position: absolute;
-            bottom: 20%;
-            width: 18vmin;
-            height: 10vmin;
-            border-radius: 50%;
-            border-bottom: 1vmin solid #000;
-            animation: mouth-move 5s infinite;
+            top: 48%;
+            left: 50%;
+            transform: translateX(-50%);
+            transition: all 0.5s ease;
         }
 
-        @keyframes mouth-move {
-            0%, 20%, 100% {
-                width: 18vmin;
-                height: 10vmin;
-            }
-            10% {
-                width: 20vmin;
-                height: 12vmin;
-            }
-        }
-
-        .ear {
-            position: absolute;
-            width: 15vmin;
-            height: 20vmin;
-            background-color: #fff;
-            border-radius: 70% 70% 0 0;
-            z-index: -1;
-        }
-
-        #left-ear {
-            top: -5%;
-            left: 15%;
-            transform: rotate(-10deg);
-        }
-
-        #right-ear {
-            top: -5%;
-            right: 15%;
-            transform: rotate(10deg);
-        }
-
-        .whiskers {
-            position: absolute;
-            width: 60%;
-            display: flex;
-            justify-content: space-between;
-        }
-
-        .whisker-group {
+        .mouth.tongue {
             display: flex;
             flex-direction: column;
-            justify-content: space-around;
-            height: 15vmin;
+            align-items: center;
         }
 
+        .mouth.tongue .mouth-shape {
+            width: 32px;
+            height: 24px;
+            border: 4px solid white;
+            border-top: none;
+            border-radius: 0 0 50px 50px;
+            background-color: black;
+        }
+
+        .mouth.tongue .tongue {
+            width: 16px;
+            height: 12px;
+            background-color: #ffc0cb; /* Pink tongue */
+            border-radius: 0 0 50px 50px;
+            margin-top: -4px;
+            animation: pulse 1s ease-in-out infinite;
+        }
+
+        .mouth.smile .mouth-shape {
+            width: 48px;
+            height: 24px;
+            border-bottom: 4px solid white;
+            border-radius: 0 0 50px 50px;
+        }
+
+        .mouth.open .mouth-shape {
+            width: 40px;
+            height: 32px;
+            border: 4px solid white;
+            border-radius: 50%;
+            background-color: black;
+        }
+
+        .mouth.sad .mouth-shape {
+            width: 48px;
+            height: 24px;
+            border-top: 4px solid white;
+            border-radius: 50px 50px 0 0;
+        }
+
+        .mouth.confused .mouth-shape {
+            width: 32px;
+            height: 4px;
+            background-color: white;
+            border-radius: 50px;
+            transform: rotate(12deg);
+        }
+
+        .mouth.neutral .mouth-shape {
+            width: 32px;
+            height: 4px;
+            background-color: white;
+            border-radius: 50px;
+        }
+
+        /* Whiskers */
         .whisker {
-            width: 12vmin;
-            height: 0.5vmin;
-            background-color: #000;
-            margin: 1vmin 0;
-        }
-
-        .left-whiskers .whisker {
-            transform-origin: left center;
-            transform: rotate(5deg);
-        }
-
-        .right-whiskers .whisker {
-            transform-origin: right center;
-            transform: rotate(-5deg);
-        }
-
-        #whiskers-container {
             position: absolute;
-            top: 50%;
-            left: 0;
-            width: 100%;
-            display: flex;
-            justify-content: space-between;
-            padding: 0 5%;
+            height: 4px;
+            background-color: white;
+            border-radius: 50px;
+            top: 40%;
         }
 
+        .whisker.left-1 {
+            width: 32px;
+            left: 4%;
+            transform: rotate(-10deg);
+            transform-origin: right center;
+        }
+
+        .whisker.left-2 {
+            width: 24px;
+            left: 4%;
+            top: 44%;
+            transform-origin: right center;
+        }
+
+        .whisker.left-3 {
+            width: 28px;
+            left: 4%;
+            top: 48%;
+            transform: rotate(10deg);
+            transform-origin: right center;
+        }
+
+        .whisker.right-1 {
+            width: 32px;
+            right: 4%;
+            transform: rotate(10deg);
+            transform-origin: left center;
+        }
+
+        .whisker.right-2 {
+            width: 24px;
+            right: 4%;
+            top: 44%;
+            transform-origin: left center;
+        }
+
+        .whisker.right-3 {
+            width: 28px;
+            right: 4%;
+            top: 48%;
+            transform: rotate(-10deg);
+            transform-origin: left center;
+        }
+
+        /* Animations */
+        @keyframes spin-slow {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        @keyframes spin-slow-reverse {
+            from { transform: rotate(360deg); }
+            to { transform: rotate(0deg); }
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+
+        /* Control panel styles */
         #control-panel {
             position: absolute;
             top: 0;
@@ -161,6 +340,7 @@
             opacity: 0;
             pointer-events: none;
             transition: opacity 0.3s ease;
+            z-index: 100;
         }
 
         #control-panel.active {
@@ -186,40 +366,6 @@
             background-color: #45a049;
         }
 
-        #restart-btn {
-            padding: 5vmin;
-            font-size: 5vmin;
-            background-color: #2196F3;
-            color: white;
-            border: none;
-            border-radius: 2vmin;
-            cursor: pointer;
-            transition: transform 0.2s;
-            margin-bottom: 5vmin;
-        }
-
-        #restart-btn:hover,
-        #restart-btn:active {
-            transform: scale(1.05);
-            background-color: #0b7dda;
-        }
-
-        #back-btn {
-            padding: 3vmin 5vmin;
-            font-size: 3vmin;
-            background-color: #f44336;
-            color: white;
-            border: none;
-            border-radius: 2vmin;
-            cursor: pointer;
-            margin-bottom: 5vmin;
-        }
-
-        #back-btn:hover,
-        #back-btn:active {
-            background-color: #d32f2f;
-        }
-
         /* Styles for the stop button */
         #stop-btn {
             padding: 5vmin;
@@ -237,26 +383,6 @@
         #stop-btn:hover,
         #stop-btn:active {
             background-color: #cc0000;
-        }
-
-        .expression {
-            animation: expression-change 10s infinite;
-        }
-
-        @keyframes expression-change {
-            0%, 100% { transform: scale(1); }
-            25% { transform: scale(0.95); }
-            50% { transform: scale(1.05); }
-            75% { transform: scale(0.98); }
-        }
-
-        @keyframes blink {
-            0%, 96%, 98% {
-                transform: scaleY(1);
-            }
-            97% {
-                transform: scaleY(0.1);
-            }
         }
 
         .button-container {
@@ -335,44 +461,70 @@
             color: white;
             margin-top: 0;
         }
+
+        /* Hidden class for elements that should be hidden */
+        .hidden {
+            display: none !important;
+        }
+
+        /* Responsive design */
+        @media (max-width: 768px) {
+            .cat-container {
+                width: min(350px, 90vw);
+                height: min(350px, 90vw);
+            }
+        }
+
+        @media (max-width: 480px) {
+            .cat-container {
+                width: min(300px, 90vw);
+                height: min(300px, 90vw);
+            }
+        }
     </style>
 </head>
 <body>
-<div id="cat-container">
-    <div id="cat-face" class="expression">
-        <div id="left-ear" class="ear"></div>
-        <div id="right-ear" class="ear"></div>
+<div class="cat-container">
+    <div class="cat-face">
 
-        <div class="eyes">
-            <div class="eye">
-                <div class="pupil"></div>
-            </div>
-            <div class="eye">
-                <div class="pupil"></div>
-            </div>
+        <!-- Eyebrows -->
+        <div class="eyebrow left" id="leftEyebrow"></div>
+        <div class="eyebrow right" id="rightEyebrow"></div>
+
+        <!-- Eyes -->
+        <div class="eye left" id="leftEye">
+            <div class="pupil" id="leftPupil"></div>
+            <div class="highlight"></div>
+            <div class="spiral left hidden" id="leftSpiral"></div>
+        </div>
+        <div class="eye right" id="rightEye">
+            <div class="pupil" id="rightPupil"></div>
+            <div class="highlight"></div>
+            <div class="spiral right hidden" id="rightSpiral"></div>
         </div>
 
-        <div class="mouth"></div>
+        <!-- Nose -->
+        <div class="nose"></div>
 
-        <div id="whiskers-container">
-            <div class="whisker-group left-whiskers">
-                <div class="whisker"></div>
-                <div class="whisker"></div>
-                <div class="whisker"></div>
-            </div>
-            <div class="whisker-group right-whiskers">
-                <div class="whisker"></div>
-                <div class="whisker"></div>
-                <div class="whisker"></div>
-            </div>
+        <!-- Mouth -->
+        <div class="mouth neutral" id="mouth">
+            <div class="mouth-shape"></div>
         </div>
+
+        <!-- Whiskers -->
+        <div class="whisker left-1"></div>
+        <div class="whisker left-2"></div>
+        <div class="whisker left-3"></div>
+        <div class="whisker right-1"></div>
+        <div class="whisker right-2"></div>
+        <div class="whisker right-3"></div>
     </div>
 </div>
 
+<!-- Control Panel Overlay -->
 <div id="control-panel">
     <div class="button-container">
         <button id="follow-btn">Follow Path</button>
-        <button id="back-btn">Back to Cat</button>
         <button id="stop-btn">STOP</button>
     </div>
 
@@ -400,27 +552,183 @@
 </div>
 
 <script>
-    // Add blinking animation to pupils
-    const pupils = document.querySelectorAll('.pupil');
-    pupils.forEach(pupil => {
-        pupil.style.animation = "blink 4s infinite";
-    });
+    // Cat Animation Code
+    const expressions = [
+        {
+            name: "happy",
+            eyebrows: "raised",
+            eyes: "normal",
+            mouth: "smile",
+            duration: 2000,
+        },
+        {
+            name: "wink",
+            eyebrows: "normal",
+            eyes: "wink",
+            mouth: "smile",
+            duration: 1500,
+        },
+        {
+            name: "surprised",
+            eyebrows: "raised",
+            eyes: "wide",
+            mouth: "open",
+            duration: 2000,
+        },
+        {
+            name: "sad",
+            eyebrows: "sad",
+            eyes: "normal",
+            mouth: "sad",
+            duration: 2000,
+        },
+        {
+            name: "dizzy",
+            eyebrows: "normal",
+            eyes: "spiral",
+            mouth: "confused",
+            duration: 2500,
+        },
+        {
+            name: "normal",
+            eyebrows: "normal",
+            eyes: "normal",
+            mouth: "neutral",
+            duration: 1500,
+        },
+    ];
 
+    let currentExpression = 0;
+    let isBlinking = false;
+
+    // DOM elements
+    const leftEyebrow = document.getElementById('leftEyebrow');
+    const rightEyebrow = document.getElementById('rightEyebrow');
+    const leftEye = document.getElementById('leftEye');
+    const rightEye = document.getElementById('rightEye');
+    const leftPupil = document.getElementById('leftPupil');
+    const rightPupil = document.getElementById('rightPupil');
+    const leftSpiral = document.getElementById('leftSpiral');
+    const rightSpiral = document.getElementById('rightSpiral');
+    const mouth = document.getElementById('mouth');
+
+    function updateExpression(expr) {
+        // Update eyebrows
+        leftEyebrow.className = `eyebrow left ${expr.eyebrows}`;
+        rightEyebrow.className = `eyebrow right ${expr.eyebrows}`;
+
+        // Update eyes
+        if (expr.eyes === 'spiral') {
+            leftEye.classList.remove('wide', 'wink');
+            rightEye.classList.remove('wide', 'wink');
+            leftPupil.classList.add('hidden');
+            rightPupil.classList.add('hidden');
+            leftSpiral.classList.remove('hidden');
+            rightSpiral.classList.remove('hidden');
+        } else if (expr.eyes === 'wink') {
+            leftEye.classList.add('wink');
+            leftEye.classList.remove('wide');
+            rightEye.classList.remove('wide', 'wink');
+            leftPupil.classList.add('hidden');
+            rightPupil.classList.remove('hidden');
+            leftSpiral.classList.add('hidden');
+            rightSpiral.classList.add('hidden');
+        } else {
+            leftEye.classList.remove('wink');
+            rightEye.classList.remove('wink');
+            leftPupil.classList.remove('hidden');
+            rightPupil.classList.remove('hidden');
+            leftSpiral.classList.add('hidden');
+            rightSpiral.classList.add('hidden');
+
+            if (expr.eyes === 'wide') {
+                leftEye.classList.add('wide');
+                rightEye.classList.add('wide');
+            } else {
+                leftEye.classList.remove('wide');
+                rightEye.classList.remove('wide');
+            }
+        }
+
+        // Update mouth
+        mouth.className = `mouth ${expr.mouth}`;
+        mouth.innerHTML = getMouthHTML(expr.mouth);
+    }
+
+    function getMouthHTML(mouthType) {
+        switch (mouthType) {
+            case 'tongue':
+                return '<div class="mouth-shape"></div><div class="tongue"></div>';
+            default:
+                return '<div class="mouth-shape"></div>';
+        }
+    }
+
+    function blink() {
+        if (expressions[currentExpression].eyes !== 'wink' &&
+            expressions[currentExpression].eyes !== 'spiral' &&
+            !isBlinking) {
+            isBlinking = true;
+            leftPupil.classList.add('blink');
+            rightPupil.classList.add('blink');
+
+            setTimeout(() => {
+                leftPupil.classList.remove('blink');
+                rightPupil.classList.remove('blink');
+                isBlinking = false;
+            }, 150);
+        }
+    }
+
+    function nextExpression() {
+        currentExpression = (currentExpression + 1) % expressions.length;
+        updateExpression(expressions[currentExpression]);
+    }
+
+    function startBlinking() {
+        setInterval(() => {
+            blink();
+        }, 3000 + Math.random() * 2000);
+    }
+
+    function startExpressionCycle() {
+        setInterval(() => {
+            nextExpression();
+        }, expressions[currentExpression].duration);
+    }
+
+    // Initialize cat expression
+    updateExpression(expressions[currentExpression]);
+    startBlinking();
+    // startExpressionCycle();
+
+    // Control Panel Code
     // Show control panel when touching the cat face
-    document.getElementById('cat-container').addEventListener('click', function() {
+    document.querySelector('.cat-container').addEventListener('click', function() {
         document.getElementById('control-panel').classList.add('active');
     });
 
-    // Hide control panel when clicking "Back to Cat" button
-    document.getElementById('back-btn').addEventListener('click', function(event) {
-        event.stopPropagation(); // Prevent triggering the cat-container click event
-        document.getElementById('control-panel').classList.remove('active');
+    // Close the control panel when clicking anywhere in the panel background
+    // (but not on buttons or controls)
+    document.getElementById('control-panel').addEventListener('click', function(event) {
+        // Only close if clicking the panel itself, not its children
+        if (event.target === this) {
+            document.getElementById('control-panel').classList.remove('active');
+        }
     });
 
     // Handle the line following button
     document.getElementById('follow-btn').addEventListener('click', function(event) {
         event.stopPropagation(); // Prevent triggering the cat-container click event
 
+        // Close the menu immediately
+        document.getElementById('control-panel').classList.remove('active');
+
+        // Show happy expression when following
+        currentExpression = expressions.findIndex(expr => expr.name === "happy");
+        updateExpression(expressions[currentExpression]);
+
+        // Then send the command
         fetch('/seekColor', {
             method: 'POST',
             headers: {
@@ -441,6 +749,10 @@
     document.getElementById('stop-btn').addEventListener('click', function(event) {
         event.stopPropagation(); // Prevent triggering the cat-container click event
 
+        // Show sad expression when stopping
+        currentExpression = expressions.findIndex(expr => expr.name === "sad");
+        updateExpression(expressions[currentExpression]);
+
         fetch('/stop', {
             method: 'POST'
         })
@@ -460,16 +772,17 @@
         const showControlsBtn = document.getElementById('show-controls-btn');
         const hideControlsBtn = document.getElementById('hide-controls-btn');
         const manualControls = document.getElementById('manual-controls');
+        const controlPanel = document.getElementById('control-panel');
 
         // Show/hide controls
         showControlsBtn.addEventListener('click', function(event) {
-            event.stopPropagation(); // Prevent triggering the cat-container click event
+            event.stopPropagation(); // Prevent triggering the control-panel click event
             manualControls.style.display = 'block';
             showControlsBtn.style.display = 'none';
         });
 
         hideControlsBtn.addEventListener('click', function(event) {
-            event.stopPropagation(); // Prevent triggering the cat-container click event
+            event.stopPropagation(); // Prevent triggering the control-panel click event
             manualControls.style.display = 'none';
             showControlsBtn.style.display = 'block';
         });
@@ -481,19 +794,25 @@
 
         // Movement controls
         const controlButtons = {
-            'forward-btn': { action: 'forward' },
-            'backward-btn': { action: 'backward' },
-            'left-btn': { action: 'left' },
-            'right-btn': { action: 'right' },
-            'stop-manual-btn': { action: 'stop' }
+            'forward-btn': { action: 'forward', expression: 'happy' },
+            'backward-btn': { action: 'backward', expression: 'surprised' },
+            'left-btn': { action: 'left', expression: 'wink' },
+            'right-btn': { action: 'right', expression: 'wink' },
+            'stop-manual-btn': { action: 'stop', expression: 'normal' }
         };
 
         // Set up button event listeners
         Object.keys(controlButtons).forEach(btnId => {
             const button = document.getElementById(btnId);
             button.addEventListener('click', function(event) {
-                event.stopPropagation(); // Prevent triggering the cat-container click event
+                event.stopPropagation(); // Prevent triggering the control-panel click event
                 const speed = parseInt(speedSlider.value);
+
+                // Set appropriate expression for the action
+                const expressionName = controlButtons[btnId].expression;
+                currentExpression = expressions.findIndex(expr => expr.name === expressionName);
+                updateExpression(expressions[currentExpression]);
+
                 sendMovementCommand(controlButtons[btnId].action, speed);
             });
         });
@@ -514,6 +833,10 @@
                 .then(response => response.text())
                 .then(data => {
                     console.log('Movement response:', data);
+                    // Close the panel if it's a stop action
+                    if (action === 'stop') {
+                        controlPanel.classList.remove('active');
+                    }
                 })
                 .catch(error => {
                     console.error('Error sending movement command:', error);

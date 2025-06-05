@@ -52,11 +52,10 @@ func main() {
 	}
 	log.Println("Roomba started")
 
-	// Set to safe mode
-	if err := roomba.SafeMode(); err != nil {
-		log.Fatalf("Failed to set Roomba to safe mode: %v", err)
+	if err := roomba.FullMode(); err != nil {
+		log.Fatalf("Failed to set Roomba to full mode: %v", err)
 	}
-	log.Println("Roomba in safe mode")
+	log.Println("Roomba in full mode")
 
 	// Create HTTP server
 	// Serve static files from the "static" directory
@@ -164,11 +163,18 @@ func main() {
 	http.HandleFunc("/stop", func(w http.ResponseWriter, r *http.Request) {
 		trackerMutex.Lock()
 		if activeTracker != nil {
+			// First stop the tracker (which stops the robot)
 			activeTracker.Stop()
+
+			// Then close all resources
+			activeTracker.Close()
+
+			// Finally, set to nil
 			activeTracker = nil
 		}
 		trackerMutex.Unlock()
 
+		// Make sure the Roomba is stopped
 		roomba.Stop()
 		fmt.Fprint(w, "Stopped")
 	})
@@ -208,6 +214,7 @@ func main() {
 		trackerMutex.Lock()
 		if activeTracker != nil {
 			activeTracker.Stop()
+			activeTracker.Close()
 			activeTracker = nil
 		}
 		trackerMutex.Unlock()

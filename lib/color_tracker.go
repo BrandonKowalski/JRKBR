@@ -16,6 +16,7 @@ type ColorTrackerConfig struct {
 	// Timing and behavior settings
 	UpdateInterval time.Duration // How often to check color position
 	StopDelay      time.Duration // How long to wait before stopping after color lost
+	MaxSearchTime  time.Duration // Maximum time to search for color before giving up
 
 	// Color detection settings
 	DetectorConfig ColorDetectionConfig
@@ -29,19 +30,22 @@ func DefaultColorTrackerConfig() ColorTrackerConfig {
 		ForwardSpeed:     130, // Moderate forward speed
 		UpdateInterval:   50 * time.Millisecond,
 		StopDelay:        300 * time.Millisecond,
+		MaxSearchTime:    30 * time.Second, // Stop searching after 30 seconds
 		DetectorConfig:   DefaultColorDetectionConfig(),
 	}
 }
 
 // ColorTracker implements a simple state machine for tracking colors
 type ColorTracker struct {
-	config        ColorTrackerConfig
-	colorDetector *ColorDetector
-	roomba        *Roomba
-	running       bool
-	stopChan      chan struct{}
-	colorLastSeen time.Time
-	lastPosition  LinePosition // Track previous position to reduce oscillation
+	config         ColorTrackerConfig
+	colorDetector  *ColorDetector
+	roomba         *Roomba
+	running        bool
+	stopChan       chan struct{}
+	colorLastSeen  time.Time
+	lastPosition   LinePosition // Track previous position to reduce oscillation
+	searchStarted  time.Time    // When the search started
+	colorEverFound bool         // If we ever found the color
 }
 
 // NewColorTracker creates a new color tracker
@@ -52,13 +56,15 @@ func NewColorTracker(config ColorTrackerConfig, roomba *Roomba) (*ColorTracker, 
 	}
 
 	return &ColorTracker{
-		config:        config,
-		colorDetector: detector,
-		roomba:        roomba,
-		running:       false,
-		stopChan:      make(chan struct{}),
-		colorLastSeen: time.Time{},
-		lastPosition:  LineNotFound,
+		config:         config,
+		colorDetector:  detector,
+		roomba:         roomba,
+		running:        false,
+		stopChan:       make(chan struct{}),
+		colorLastSeen:  time.Time{},
+		lastPosition:   LineNotFound,
+		searchStarted:  time.Time{},
+		colorEverFound: false,
 	}, nil
 }
 
@@ -69,6 +75,8 @@ func (ct *ColorTracker) Start() {
 	}
 
 	ct.running = true
+	ct.searchStarted = time.Now()
+	ct.colorEverFound = false
 	ct.colorDetector.Start()
 
 	// Begin searching by rotating
@@ -86,24 +94,41 @@ func (ct *ColorTracker) Stop() {
 	}
 
 	ct.running = false
+
+	// Signal the control loop to stop
 	close(ct.stopChan)
 
-	ct.colorDetector.Stop()
-	ct.roomba.Stop()
+	// Make sure to stop the detector
+	if ct.colorDetector != nil {
+		ct.colorDetector.Stop()
+	}
+
+	// Stop the Roomba
+	if ct.roomba != nil {
+		ct.roomba.Stop()
+	}
 
 	log.Println("Color tracker stopped")
 }
 
 // Close releases all resources
 func (ct *ColorTracker) Close() {
+	// First stop tracking
 	ct.Stop()
-	ct.colorDetector.Close()
+
+	// Then close detector resources
+	if ct.colorDetector != nil {
+		ct.colorDetector.Close()
+		ct.colorDetector = nil
+	}
 }
 
 // SetColorRange allows changing the color being detected
 func (ct *ColorTracker) SetColorRange(lowerHSV, upperHSV gocv.Scalar) {
-	ct.colorDetector.Config.LowerHSVBound = lowerHSV
-	ct.colorDetector.Config.UpperHSVBound = upperHSV
+	if ct.colorDetector != nil {
+		ct.colorDetector.Config.LowerHSVBound = lowerHSV
+		ct.colorDetector.Config.UpperHSVBound = upperHSV
+	}
 }
 
 // GetColorDetector returns the underlying color detector
@@ -116,12 +141,43 @@ func (ct *ColorTracker) controlLoop() {
 	ticker := time.NewTicker(ct.config.UpdateInterval)
 	defer ticker.Stop()
 
+	// Create a separate timer for the max search time
+	searchTimer := time.NewTimer(ct.config.MaxSearchTime)
+	defer searchTimer.Stop()
+
 	for {
 		select {
 		case <-ct.stopChan:
 			return
+		case <-searchTimer.C:
+			// Maximum search time reached without finding the color
+			if !ct.colorEverFound {
+				log.Println("Maximum search time reached without finding color - Stopping search")
+				ct.roomba.Stop()
+				ct.Stop() // This will also close the stopChan
+				return
+			}
 		case <-ticker.C:
-			position := ct.colorDetector.GetPosition()
+			if !ct.running {
+				return
+			}
+
+			// Check current position
+			position := LineNotFound
+			if ct.colorDetector != nil {
+				position = ct.colorDetector.GetPosition()
+			}
+
+			// If we found color for the first time, mark it
+			if position != LineNotFound && !ct.colorEverFound {
+				ct.colorEverFound = true
+				// Reset the search timer since we found the color
+				if !searchTimer.Stop() {
+					<-searchTimer.C // Drain the channel if the timer has already fired
+				}
+			}
+
+			// Handle the position
 			ct.handleColorPosition(position)
 		}
 	}
@@ -139,9 +195,24 @@ func (ct *ColorTracker) handleColorPosition(position LinePosition) {
 			log.Println("Color lost - Stopping")
 			err = ct.roomba.Stop()
 			ct.colorLastSeen = time.Time{} // Reset the last seen time
+
+			// If we've been running a while and now lost the color, stop the tracker
+			if ct.colorEverFound && time.Since(ct.searchStarted) > 5*time.Second {
+				log.Println("Color tracking session complete - Stopping tracker")
+				ct.Stop() // This will also close the stopChan and end the control loop
+				return
+			}
 		} else if ct.colorLastSeen.IsZero() {
 			// If we've never seen the color, use a slow search speed
 			err = ct.roomba.Drive(ct.config.MinRotationSpeed, -1) // Slow clockwise rotation
+
+			// Check if we've been searching too long without finding anything
+			if time.Since(ct.searchStarted) > ct.config.MaxSearchTime && !ct.colorEverFound {
+				log.Println("Search timeout - No color found")
+				err = ct.roomba.Stop()
+				ct.Stop() // Stop the tracker
+				return
+			}
 		}
 		// If we've just started searching or recently lost the color,
 		// continue with the current rotation
