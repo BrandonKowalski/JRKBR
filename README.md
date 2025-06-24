@@ -33,7 +33,7 @@ Whelp, here goes nothing!
     - If (when) this link goes dead, [here is a screenshot](resources/images/serial_cable.png)
 - [7 Inch IPS LCD Capacitive Touch Screen, 1024x768](https://www.amazon.com/dp/B09XKC53NH)
     - Again link rot dictates this will go dead, [here is a screenshot](resources/images/screen.png)
-    - I wasn't going to have a screen but I need to replicate the cute cat found on the Bellabot
+    - I wasn't going to have a screen, but I need to replicate the cute cat found on the Bellabot
 - Raspberry Pi 4 Model B
 - Logitech Brio 4K Webcam (Overkill, but I owned it)
 - Large Capacity Battery Bank
@@ -44,7 +44,8 @@ Whelp, here goes nothing!
         - Modified [this fantastic STL](https://www.printables.com/model/294317-gopro-mount-on-3d-printer-frame)
     - Brackets to attach flat bar rails to the Roomba
     - Brackets to attach chafing dishes to flat bar
-    - Brackets to attach the screen to the flat bar
+    - [This awesome model](https://www.thingiverse.com/thing:2964140) as the starting point for the display case
+      modified with the same GoPro style mount above
 - Assorted USB Cables to attach everything
 - Painter's Tape
 

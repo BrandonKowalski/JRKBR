@@ -11,7 +11,7 @@ import (
 
 func main() {
 	// Create a configuration
-	config := lib.DefaultColorDetectionConfig()
+	config := lib.ToleranceBlueColorDetectionConfig()
 	config.ShowWindow = true // Enable window display
 
 	// Create the color detector
@@ -39,6 +39,13 @@ func main() {
 	// Main loop - IMPORTANT: Window display functions must run in the main thread
 	running := true
 	for running {
+		//go func() {
+		//	for {
+		//		time.Sleep(2 * time.Second)
+		//		detector.SampleHSVValues() // This will print HSV values every 2 seconds
+		//	}
+		//}()
+
 		select {
 		case <-sigCh:
 			fmt.Println("\nShutting down...")

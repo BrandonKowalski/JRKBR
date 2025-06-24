@@ -95,10 +95,9 @@ func main() {
 			return
 		}
 
-		// Get color to seek - default to lime if not specified
 		colorName := r.FormValue("color")
 		if colorName == "" {
-			colorName = "lime" // Default to lime
+			colorName = "blue"
 		}
 
 		log.Printf("Seeking color: %s", colorName)
@@ -122,8 +121,8 @@ func main() {
 			config.DetectorConfig.LowerHSVBound = gocv.NewScalar(0, 100, 100, 0)
 			config.DetectorConfig.UpperHSVBound = gocv.NewScalar(10, 255, 255, 0)
 		case "blue":
-			config.DetectorConfig.LowerHSVBound = gocv.NewScalar(100, 100, 100, 0)
-			config.DetectorConfig.UpperHSVBound = gocv.NewScalar(130, 255, 255, 0)
+			config.DetectorConfig.LowerHSVBound = gocv.NewScalar(98, 190, 190, 0)
+			config.DetectorConfig.UpperHSVBound = gocv.NewScalar(115, 240, 250, 0)
 		case "yellow":
 			config.DetectorConfig.LowerHSVBound = gocv.NewScalar(20, 100, 100, 0)
 			config.DetectorConfig.UpperHSVBound = gocv.NewScalar(30, 255, 255, 0)
