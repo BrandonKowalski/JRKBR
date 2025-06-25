@@ -3,7 +3,6 @@ package lib
 import (
 	"gocv.io/x/gocv"
 	"log"
-	"math"
 	"time"
 )
 
@@ -52,26 +51,24 @@ func DefaultColorTrackerConfig() ColorTrackerConfig {
 	}
 }
 
-// ColorTracker implements a bang-bang control state machine for tracking vertical lines
 type ColorTracker struct {
-	config         ColorTrackerConfig
-	colorDetector  *ColorDetector
-	roomba         *Roomba
-	running        bool
-	stopChan       chan struct{}
-	colorLastSeen  time.Time
-	lastPosition   LinePosition
-	searchStarted  time.Time
-	colorEverFound bool
-
-	// Bang-bang control state
+	config              ColorTrackerConfig
+	Detector            *ColorDetector
+	roomba              *Roomba
+	running             bool
+	stopChan            chan struct{}
+	ownedDetector       bool // Whether this tracker owns the detector
+	colorLastSeen       time.Time
+	lastPosition        LinePosition
+	searchStarted       time.Time
+	colorEverFound      bool
 	currentState        RobotState
 	stateStartTime      time.Time
-	consecutiveCentered int // Count consecutive centered detections
+	consecutiveCentered int
 
 	// Orientation tracking
 	unknownOrientationCount int
-	firstUnknownTime        time.Time
+	orientationStartTime    time.Time
 }
 
 // RobotState represents the current state of the robot
@@ -86,7 +83,6 @@ const (
 	StateStopped
 )
 
-// NewColorTracker creates a new color tracker for vertical line following
 func NewColorTracker(config ColorTrackerConfig, roomba *Roomba) (*ColorTracker, error) {
 	// Make the center zone wider for bang-bang control
 	config.DetectorConfig.CenterWidth = 4 // Much wider dead zone (1/4 of screen width)
@@ -98,10 +94,37 @@ func NewColorTracker(config ColorTrackerConfig, roomba *Roomba) (*ColorTracker, 
 
 	return &ColorTracker{
 		config:              config,
-		colorDetector:       detector,
+		Detector:            detector,
 		roomba:              roomba,
 		running:             false,
 		stopChan:            make(chan struct{}),
+		ownedDetector:       true, // We own this detector
+		colorLastSeen:       time.Time{},
+		lastPosition:        LineNotFound,
+		searchStarted:       time.Time{},
+		colorEverFound:      false,
+		currentState:        StateStopped,
+		stateStartTime:      time.Now(),
+		consecutiveCentered: 0,
+	}, nil
+}
+
+// NewColorTrackerWithDetector creates a tracker with an existing detector
+func NewColorTrackerWithDetector(detector *ColorDetector, roomba *Roomba) (*ColorTracker, error) {
+	// Stop the detector if it's currently running
+	if detector.IsRunning() {
+		detector.Stop()
+	}
+
+	config := DefaultColorTrackerConfig()
+
+	return &ColorTracker{
+		config:              config,
+		Detector:            detector,
+		roomba:              roomba,
+		running:             false,
+		stopChan:            make(chan struct{}),
+		ownedDetector:       false, // Don't close this detector when tracker is closed
 		colorLastSeen:       time.Time{},
 		lastPosition:        LineNotFound,
 		searchStarted:       time.Time{},
@@ -121,7 +144,8 @@ func (ct *ColorTracker) Start() {
 	ct.running = true
 	ct.searchStarted = time.Now()
 	ct.colorEverFound = false
-	ct.colorDetector.Start()
+	ct.stopChan = make(chan struct{}) // Create new stop channel
+	ct.Detector.Start()
 
 	// Begin searching
 	ct.enterState(StateSearching)
@@ -143,8 +167,8 @@ func (ct *ColorTracker) Stop() {
 	close(ct.stopChan)
 
 	// Make sure to stop the detector
-	if ct.colorDetector != nil {
-		ct.colorDetector.Stop()
+	if ct.Detector != nil {
+		ct.Detector.Stop()
 	}
 
 	// Stop the Roomba
@@ -156,29 +180,25 @@ func (ct *ColorTracker) Stop() {
 	log.Println("Vertical line tracker stopped")
 }
 
-// Close releases all resources
 func (ct *ColorTracker) Close() {
-	// First stop tracking
 	ct.Stop()
 
-	// Then close detector resources
-	if ct.colorDetector != nil {
-		ct.colorDetector.Close()
-		ct.colorDetector = nil
+	// Only close the detector if we own it
+	if ct.ownedDetector && ct.Detector != nil {
+		ct.Detector.Close()
 	}
 }
 
 // SetColorRange allows changing the color being detected
 func (ct *ColorTracker) SetColorRange(lowerHSV, upperHSV gocv.Scalar) {
-	if ct.colorDetector != nil {
-		ct.colorDetector.Config.LowerHSVBound = lowerHSV
-		ct.colorDetector.Config.UpperHSVBound = upperHSV
+	if ct.Detector != nil {
+		ct.Detector.UpdateColorRange(lowerHSV, upperHSV)
 	}
 }
 
 // GetColorDetector returns the underlying color detector
 func (ct *ColorTracker) GetColorDetector() *ColorDetector {
-	return ct.colorDetector
+	return ct.Detector
 }
 
 // enterState changes the robot state and performs the associated action
@@ -272,8 +292,8 @@ func (ct *ColorTracker) controlLoop() {
 
 			// Check current position
 			position := LineNotFound
-			if ct.colorDetector != nil {
-				position = ct.colorDetector.GetPosition()
+			if ct.Detector != nil {
+				position = ct.Detector.GetPosition()
 			}
 
 			// If we found color for the first time, mark it
@@ -286,233 +306,127 @@ func (ct *ColorTracker) controlLoop() {
 			}
 
 			// Handle the position with bang-bang control
-			ct.handleVerticalLineControl(position)
+			ct.handleVerticalLineControl()
 		}
 	}
 }
 
-// handleVerticalLineControl implements line following logic for vertical lines
-func (ct *ColorTracker) handleVerticalLineControl(position LinePosition) {
+// handleVerticalLineControl implements simplified line following logic
+func (ct *ColorTracker) handleVerticalLineControl() {
 	now := time.Now()
 	stateAge := now.Sub(ct.stateStartTime)
 
-	// Get full detection result including orientation
-	result := ct.colorDetector.GetDetectionResult()
+	// Get detection result
+	result := ct.Detector.GetDetectionResult()
 
 	// Update color tracking
 	if result.Position != LineNotFound {
 		ct.colorLastSeen = now
 		ct.lastPosition = result.Position
+		ct.colorEverFound = true
 	}
 
 	// Check if color has been lost for too long
 	if !ct.colorLastSeen.IsZero() && now.Sub(ct.colorLastSeen) > ct.config.StopDelay {
 		if ct.colorEverFound && now.Sub(ct.searchStarted) > 5*time.Second {
-			log.Println("Vertical line tracking session complete - Stopping tracker")
+			log.Println("Line tracking session complete - Stopping tracker")
 			ct.Stop()
 			return
 		} else {
 			ct.enterState(StateSearching)
 			ct.colorLastSeen = time.Time{}
-			ct.consecutiveCentered = 0
-			ct.resetOrientationTracking()
 			return
 		}
 	}
 
-	// Determine if the line orientation is acceptable for forward movement
-	isOrientationAcceptable := ct.isOrientationGoodForFollowing(result)
+	// Pure position-based control - ignore orientation completely
+	var nextAction RobotState = StateSearching
 
-	// Determine the best action based on position and orientation
-	var preferredAction RobotState
-	if result.Position == LineCentered && isOrientationAcceptable {
-		preferredAction = StateMovingForward
-	} else if result.Position == LineCentered && !isOrientationAcceptable {
-		// Line is centered but not vertical - need to turn to align with it
-		preferredAction = ct.getTurnDirectionForAlignment(result)
-	} else {
-		// Line is not centered - turn to center it
+	if result.Position != LineNotFound {
 		switch result.Position {
+		case LineCentered:
+			nextAction = StateMovingForward
 		case LineLeft:
-			preferredAction = StateTurningLeft
+			nextAction = StateTurningLeft
 		case LineRight:
-			preferredAction = StateTurningRight
-		default:
-			preferredAction = StateSearching
+			nextAction = StateTurningRight
 		}
 	}
 
-	// State machine logic
+	// Simple state transitions
 	switch ct.currentState {
 	case StateSearching:
-		if result.Position != LineNotFound {
-			if preferredAction == StateMovingForward {
-				ct.consecutiveCentered++
-				if ct.consecutiveCentered >= 2 {
-					log.Printf("Vertical line ready for following")
-					ct.enterState(StateMovingForward)
-					ct.consecutiveCentered = 0
-					ct.resetOrientationTracking()
-				}
-			} else {
-				log.Printf("Need to align with line - %s", ct.stateString(preferredAction))
-				ct.enterState(preferredAction)
-				ct.consecutiveCentered = 0
-			}
+		if nextAction != StateSearching {
+			log.Printf("Line detected - %s", ct.stateString(nextAction))
+			ct.enterState(nextAction)
 		}
 
 	case StateTurningLeft, StateTurningRight:
-		// Check if we should stop turning
 		if stateAge >= ct.config.PulseDuration {
-			ct.enterState(StatePaused)
-		} else if result.Position == LineCentered && isOrientationAcceptable {
-			log.Println("Achieved proper alignment while turning - stopping")
 			ct.enterState(StatePaused)
 		}
 
 	case StatePaused:
-		pauseDuration := ct.config.PauseDuration
-		if ct.lastPosition == LineCentered {
-			pauseDuration = ct.config.CenterPauseTime
-		}
-
-		if stateAge >= pauseDuration {
-			if preferredAction == StateMovingForward {
-				ct.consecutiveCentered++
-				if ct.consecutiveCentered >= 2 {
-					log.Printf("Confirmed proper alignment - moving forward")
-					ct.enterState(StateMovingForward)
-					ct.consecutiveCentered = 0
-					ct.resetOrientationTracking()
-				} else {
-					ct.stateStartTime = now // Stay paused a bit longer
-				}
-			} else {
-				log.Printf("Still need adjustment - continuing alignment")
-				ct.enterState(preferredAction)
-				ct.consecutiveCentered = 0
-			}
+		if stateAge >= ct.config.PauseDuration {
+			ct.enterState(nextAction)
 		}
 
 	case StateMovingForward:
-		// While moving forward, constantly adjust to stay on the line
-		switch result.Position {
-		case LineLeft:
-			ct.enterState(StateTurningLeft)
-			ct.consecutiveCentered = 0
-		case LineRight:
-			ct.enterState(StateTurningRight)
-			ct.consecutiveCentered = 0
-		case LineNotFound:
-			ct.enterState(StatePaused)
-			ct.consecutiveCentered = 0
-		case LineCentered:
-			// Check if orientation is still good for following
-			if !isOrientationAcceptable {
-				log.Printf("Line orientation changed while moving - stopping to realign")
-				ct.enterState(StatePaused)
-				ct.consecutiveCentered = 0
-			} else {
-				// Continue forward
-				ct.consecutiveCentered++
-			}
+		if nextAction != StateMovingForward {
+			log.Printf("Need to adjust - %s", ct.stateString(nextAction))
+			ct.enterState(nextAction)
 		}
-
-	case StateStopped:
-		// Do nothing
 	}
-
 }
 
-// isOrientationGoodForFollowing determines if the line orientation is suitable for following
+// isOrientationGoodForFollowing determines if the detected line orientation is suitable for forward movement
 func (ct *ColorTracker) isOrientationGoodForFollowing(result LineDetectionResult) bool {
 	switch result.Orientation {
 	case OrientationVertical:
-		// Perfect - vertical line is exactly what we want to follow
-		ct.resetOrientationTracking()
 		return true
+	case OrientationUnknown:
+		// Handle unknown orientation with timeout
+		if ct.unknownOrientationCount == 0 {
+			ct.orientationStartTime = time.Now()
+		}
+		ct.unknownOrientationCount++
 
-	case OrientationDiagonal:
-		// Check if the angle is close enough to vertical
-		absAngle := math.Abs(result.Angle)
-		angleFromVertical := math.Min(absAngle, 180-absAngle) // Distance from 90°
-		if angleFromVertical <= 30.0 {                        // More lenient threshold for forward movement
-			log.Printf("Diagonal angle %.1f° is close enough to vertical (%.1f° from vertical) - allowing forward", result.Angle, angleFromVertical)
+		// If we've been getting unknown orientation for too long, assume it's vertical
+		if time.Since(ct.orientationStartTime) > ct.config.UnknownOrientationTimeout {
+			log.Printf("Unknown orientation timeout - assuming vertical")
 			ct.resetOrientationTracking()
 			return true
-		} else {
-			log.Printf("Diagonal angle %.1f° is too far from vertical (%.1f° away) - needs alignment", result.Angle, angleFromVertical)
+		}
+
+		// If we've exceeded max attempts, assume vertical
+		if ct.unknownOrientationCount >= ct.config.MaxUnknownOrientationAttempts {
+			log.Printf("Max unknown orientation attempts reached - assuming vertical")
 			ct.resetOrientationTracking()
-			return false
+			return true
 		}
 
-	case OrientationHorizontal:
-		// Definitely not acceptable for vertical line following
-		ct.resetOrientationTracking()
 		return false
-
-	case OrientationUnknown:
-		// Track unknown orientation attempts
-		if ct.firstUnknownTime.IsZero() {
-			ct.firstUnknownTime = time.Now()
-			ct.unknownOrientationCount = 1
-			log.Printf("First unknown orientation detected")
-		} else {
-			ct.unknownOrientationCount++
-			timeSinceFirstUnknown := time.Since(ct.firstUnknownTime)
-
-			// Give up on orientation detection faster and just assume vertical
-			if ct.unknownOrientationCount >= 3 || timeSinceFirstUnknown >= 1*time.Second {
-				log.Printf("Giving up on orientation detection - assuming vertical for forward movement")
-				ct.resetOrientationTracking()
-				return true
-			}
-		}
-
-		log.Printf("Unknown orientation attempt %d/3", ct.unknownOrientationCount)
-		return false
-
 	default:
+		ct.resetOrientationTracking()
 		return false
 	}
 }
 
-// getTurnDirectionForAlignment determines which way to turn to align with a vertical line
+// getTurnDirectionForAlignment determines which way to turn to align with a non-vertical line
 func (ct *ColorTracker) getTurnDirectionForAlignment(result LineDetectionResult) RobotState {
-	switch result.Orientation {
-	case OrientationDiagonal:
-		// For vertical line following, we want to align the robot so the line appears vertical
-		// If the line appears tilted, we need to turn to make it vertical
-		if result.Angle > 0 {
-			// Line tilts to the right, turn left to make it vertical
-			log.Printf("Diagonal line with positive angle %.1f° - turning left to align vertically", result.Angle)
-			return StateTurningLeft
-		} else {
-			// Line tilts to the left, turn right to make it vertical
-			log.Printf("Diagonal line with negative angle %.1f° - turning right to align vertically", result.Angle)
-			return StateTurningRight
-		}
-	case OrientationHorizontal:
-		// For horizontal lines, pick a direction to try to find the vertical part
-		log.Printf("Horizontal line detected - turning right to find vertical part")
-		return StateTurningRight
-	case OrientationUnknown:
-		// For unknown orientation, alternate turns to avoid getting stuck
-		if ct.unknownOrientationCount%2 == 0 {
-			log.Printf("Unknown orientation - trying right turn")
-			return StateTurningRight
-		} else {
-			log.Printf("Unknown orientation - trying left turn")
-			return StateTurningLeft
-		}
-	default:
-		// This shouldn't happen if orientation is vertical
-		return StateTurningRight
+	// For horizontal or diagonal lines, we want to turn to make them more vertical
+	// This is a simplified approach - could be improved with more sophisticated angle analysis
+	angle := result.Angle
+
+	if angle > 0 {
+		return StateTurningLeft // Turn counter-clockwise to reduce positive angle
+	} else {
+		return StateTurningRight // Turn clockwise to reduce negative angle
 	}
 }
 
 // resetOrientationTracking resets the orientation tracking counters
 func (ct *ColorTracker) resetOrientationTracking() {
 	ct.unknownOrientationCount = 0
-	ct.firstUnknownTime = time.Time{}
+	ct.orientationStartTime = time.Time{}
 }

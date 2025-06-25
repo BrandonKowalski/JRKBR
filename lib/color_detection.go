@@ -62,13 +62,13 @@ func DefaultColorDetectionConfig() ColorDetectionConfig {
 	return ColorDetectionConfig{
 		LowerHSVBound:        gocv.NewScalar(35, 100, 100, 0), // Green color in HSV
 		UpperHSVBound:        gocv.NewScalar(50, 255, 255, 0),
-		CenterWidth:          4, // Much wider center zone for bang-bang control (1/4 of screen width)
+		CenterWidth:          2, // Center zone for bang-bang control
 		MinContourArea:       300,
 		ShowWindow:           false, // Default to headless mode
 		WindowName:           "Line Tracking",
 		CameraID:             0,
 		MorphKernelSize:      5,
-		OrientationTolerance: 15.0,  // ±15 degrees is considered "vertical" for line following
+		OrientationTolerance: 45.0,  // Very forgiving - almost anything is "followable"
 		MinLineLength:        30.0,  // Lower minimum length requirement
 		UseHoughLines:        false, // Use contour method only
 	}
@@ -146,6 +146,7 @@ func (cd *ColorDetector) Start() {
 		return
 	}
 	cd.running = true
+	cd.stopChan = make(chan struct{}) // Create new stop channel each time
 	cd.mu.Unlock()
 
 	go cd.detectionLoop()
@@ -188,6 +189,23 @@ func (cd *ColorDetector) Close() {
 	if !cd.displayFrame.Empty() {
 		cd.displayFrame.Close()
 	}
+}
+
+// UpdateColorRange allows changing the color being detected
+func (cd *ColorDetector) UpdateColorRange(lower, upper gocv.Scalar) {
+	cd.mu.Lock()
+	defer cd.mu.Unlock()
+	cd.Config.LowerHSVBound = lower
+	cd.Config.UpperHSVBound = upper
+	log.Printf("Updated color range: Lower=%.1f,%.1f,%.1f Upper=%.1f,%.1f,%.1f",
+		lower.Val1, lower.Val2, lower.Val3, upper.Val1, upper.Val2, upper.Val3)
+}
+
+// IsRunning returns whether the detector is currently running
+func (cd *ColorDetector) IsRunning() bool {
+	cd.mu.RLock()
+	defer cd.mu.RUnlock()
+	return cd.running
 }
 
 // GetPosition returns the current detected line position (legacy method)
@@ -254,37 +272,47 @@ func (cd *ColorDetector) detectOrientationWithContour(contour gocv.PointVector) 
 	// Use minimum area rectangle to get orientation
 	rect := gocv.MinAreaRect(contour)
 	angle := rect.Angle
-
 	width := rect.Width
 	height := rect.Height
 
-	// Determine the actual orientation angle
-	var orientationAngle float64
+	// Calculate aspect ratio to determine if this is a line-like shape
+	aspectRatio := math.Max(float64(width), float64(height)) / math.Min(float64(width), float64(height))
+
+	// Be more lenient with aspect ratio - lines can appear less elongated when viewed at angles
+	if aspectRatio < 1.3 { // Much more lenient threshold
+		log.Printf("Contour orientation: rect angle=%.1f°, size=(%.1f,%.1f), aspect=%.2f -> UNKNOWN (not elongated)",
+			angle, width, height, aspectRatio)
+		return OrientationUnknown
+	}
+
+	// Determine the actual line orientation
+	var lineAngle float64
+
 	if width > height {
-		// Rectangle is wider than tall - angle directly represents line orientation
-		orientationAngle = angle
+		// Rectangle is wider than tall
+		lineAngle = angle
 	} else {
-		// Rectangle is taller than wide - need to adjust angle by 90 degrees
-		orientationAngle = angle + 90
+		// Rectangle is taller than wide
+		lineAngle = angle + 90
 	}
 
 	// Normalize to [-90, 90] range
-	for orientationAngle > 90 {
-		orientationAngle -= 180
+	for lineAngle > 90 {
+		lineAngle -= 180
 	}
-	for orientationAngle < -90 {
-		orientationAngle += 180
+	for lineAngle < -90 {
+		lineAngle += 180
 	}
 
 	// Store the angle in the result for later use
 	cd.mu.Lock()
-	cd.lastResult.Angle = orientationAngle
+	cd.lastResult.Angle = lineAngle
 	cd.mu.Unlock()
 
-	log.Printf("Contour orientation: rect angle=%.1f°, size=(%.1f,%.1f), final angle=%.1f°",
-		angle, width, height, orientationAngle)
+	log.Printf("Contour orientation: rect angle=%.1f°, size=(%.1f,%.1f), aspect=%.2f, line angle=%.1f°",
+		angle, width, height, aspectRatio, lineAngle)
 
-	return cd.classifyOrientation(orientationAngle)
+	return cd.classifyOrientation(lineAngle)
 }
 
 // classifyOrientation classifies an angle into orientation categories
@@ -296,6 +324,7 @@ func (cd *ColorDetector) classifyOrientation(angle float64) LineOrientation {
 		angle, absAngle, cd.Config.OrientationTolerance)
 
 	// For line following, vertical lines (±90°) are what we want to follow
+	// Check if angle is close to ±90 degrees (vertical)
 	if absAngle >= (90 - cd.Config.OrientationTolerance) {
 		log.Printf("Classified as VERTICAL (good for following)")
 		return OrientationVertical
@@ -308,9 +337,8 @@ func (cd *ColorDetector) classifyOrientation(angle float64) LineOrientation {
 	}
 }
 
-// detectionLoop is the main processing loop for color detection
 func (cd *ColorDetector) detectionLoop() {
-	// Prepare images for processing
+	// Prepare images for processing - these are reused throughout the loop
 	img := gocv.NewMat()
 	defer img.Close()
 
@@ -325,6 +353,13 @@ func (cd *ColorDetector) detectionLoop() {
 
 	coloredMask := gocv.NewMat()
 	defer coloredMask.Close()
+
+	// Reusable Mats for display
+	originalImg := gocv.NewMat()
+	defer originalImg.Close()
+
+	combinedDisplay := gocv.NewMat()
+	defer combinedDisplay.Close()
 
 	kernel := gocv.GetStructuringElement(gocv.MorphRect, image.Pt(cd.Config.MorphKernelSize, cd.Config.MorphKernelSize))
 	defer kernel.Close()
@@ -348,8 +383,8 @@ func (cd *ColorDetector) detectionLoop() {
 				continue
 			}
 
-			// Clone for storage
-			originalImg := img.Clone()
+			// Clone for storage and processing (reuse existing Mat)
+			img.CopyTo(&originalImg)
 
 			// Set the center rectangle dimensions
 			width := img.Cols()
@@ -431,6 +466,9 @@ func (cd *ColorDetector) detectionLoop() {
 				}
 			}
 
+			// Clean up contours immediately after use
+			contours.Close()
+
 			// Store the result
 			cd.mu.Lock()
 			cd.lastResult = result
@@ -440,49 +478,61 @@ func (cd *ColorDetector) detectionLoop() {
 			gocv.Rectangle(&originalImg, cd.centerRect, blue, 1)
 			gocv.Rectangle(&coloredMask, cd.centerRect, blue, 1)
 
-			// Create display with status information
-			statusBarHeight := 80
-			totalHeight := (height * 2) + statusBarHeight
-			combinedDisplay := gocv.NewMatWithSize(totalHeight, width, gocv.MatTypeCV8UC3)
-			defer combinedDisplay.Close()
+			// Only create display if showing window
+			if cd.Config.ShowWindow {
+				// Create display with status information
+				statusBarHeight := 80
+				totalHeight := (height * 2) + statusBarHeight
 
-			gocv.Rectangle(&combinedDisplay, image.Rect(0, 0, width, totalHeight), black, -1)
+				// Resize combinedDisplay if needed
+				if combinedDisplay.Empty() || combinedDisplay.Rows() != totalHeight || combinedDisplay.Cols() != width {
+					if !combinedDisplay.Empty() {
+						combinedDisplay.Close()
+					}
+					combinedDisplay = gocv.NewMatWithSize(totalHeight, width, gocv.MatTypeCV8UC3)
+				}
 
-			// Copy images
-			roi := combinedDisplay.Region(image.Rect(0, 0, width, height))
-			originalImg.CopyTo(&roi)
-			roi.Close()
+				gocv.Rectangle(&combinedDisplay, image.Rect(0, 0, width, totalHeight), black, -1)
 
-			roi = combinedDisplay.Region(image.Rect(0, height+statusBarHeight, width, totalHeight))
-			coloredMask.CopyTo(&roi)
-			roi.Close()
+				// Copy images
+				roi := combinedDisplay.Region(image.Rect(0, 0, width, height))
+				originalImg.CopyTo(&roi)
+				roi.Close()
 
-			// Add status text
-			statusText := fmt.Sprintf("Pos: %s | Orient: %s | Angle: %.1f° | Conf: %.2f",
-				result.Position, result.Orientation, result.Angle, result.Confidence)
+				roi = combinedDisplay.Region(image.Rect(0, height+statusBarHeight, width, totalHeight))
+				coloredMask.CopyTo(&roi)
+				roi.Close()
 
-			var statusColor color.RGBA
-			if result.Position == LineCentered && result.Orientation == OrientationVertical {
-				statusColor = green // Ready for forward movement - line is centered and vertical
-			} else {
-				statusColor = white
+				// Add status text
+				statusText := fmt.Sprintf("Pos: %s | Orient: %s | Angle: %.1f° | Conf: %.2f",
+					result.Position, result.Orientation, result.Angle, result.Confidence)
+
+				var statusColor color.RGBA
+				if result.Position == LineCentered && result.Orientation == OrientationVertical {
+					statusColor = green // Ready for forward movement - line is centered and vertical
+				} else {
+					statusColor = white
+				}
+
+				gocv.PutText(&combinedDisplay, "Original", image.Pt(10, 25), gocv.FontHersheyPlain, 1.2, white, 2)
+				gocv.PutText(&combinedDisplay, statusText, image.Pt(10, height+25), gocv.FontHersheyPlain, 1.0, statusColor, 2)
+				gocv.PutText(&combinedDisplay, "Color Mask", image.Pt(10, height+statusBarHeight+25), gocv.FontHersheyPlain, 1.2, white, 2)
+
+				// Store the display frame
+				cd.mu.Lock()
+				if !cd.displayFrame.Empty() {
+					cd.displayFrame.Close()
+				}
+				cd.displayFrame = combinedDisplay.Clone()
+				cd.mu.Unlock()
 			}
 
-			gocv.PutText(&combinedDisplay, "Original", image.Pt(10, 25), gocv.FontHersheyPlain, 1.2, white, 2)
-			gocv.PutText(&combinedDisplay, statusText, image.Pt(10, height+25), gocv.FontHersheyPlain, 1.0, statusColor, 2)
-			gocv.PutText(&combinedDisplay, "Color Mask", image.Pt(10, height+statusBarHeight+25), gocv.FontHersheyPlain, 1.2, white, 2)
-
-			// Store the display frame
+			// Store the last frame
 			cd.mu.Lock()
 			if !cd.lastFrame.Empty() {
 				cd.lastFrame.Close()
 			}
-			cd.lastFrame = originalImg
-
-			if !cd.displayFrame.Empty() {
-				cd.displayFrame.Close()
-			}
-			cd.displayFrame = combinedDisplay.Clone()
+			cd.lastFrame = originalImg.Clone()
 			cd.mu.Unlock()
 		}
 	}

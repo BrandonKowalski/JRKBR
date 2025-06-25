@@ -9,15 +9,40 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"runtime"
 	"strconv"
 	"sync"
+	"time"
 )
 
 var roomba *lib.Roomba
 var activeTracker *lib.ColorTracker
 var trackerMutex sync.Mutex
+var globalDetector *lib.ColorDetector // Single detector instance
+var detectorMutex sync.Mutex
+
+func monitorMemory() {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+
+		// Force garbage collection if memory usage is high
+		if m.Alloc > 100*1024*1024 { // If using more than 100MB
+			log.Printf("High memory usage detected: %d MB, forcing GC", m.Alloc/1024/1024)
+			runtime.GC()
+		}
+
+		log.Printf("Memory: Alloc=%d KB, TotalAlloc=%d KB, Sys=%d KB, NumGC=%d",
+			m.Alloc/1024, m.TotalAlloc/1024, m.Sys/1024, m.NumGC)
+	}
+}
 
 func main() {
+	go monitorMemory()
+
 	// Check command line arguments
 	if len(os.Args) < 2 {
 		fmt.Println("Usage: jrkbr <serial_port>")
@@ -52,10 +77,22 @@ func main() {
 	}
 	log.Println("Roomba started")
 
-	if err := roomba.FullMode(); err != nil {
-		log.Fatalf("Failed to set Roomba to full mode: %v", err)
+	if err := roomba.SafeMode(); err != nil {
+		log.Fatalf("Failed to set Roomba to safe mode: %v", err)
 	}
-	log.Println("Roomba in full mode")
+	log.Println("Roomba in safe mode")
+
+	// Initialize the global camera detector once
+	config := lib.DefaultColorDetectionConfig()
+	config.CameraID = 0 // Set your camera ID
+	detector, err := lib.NewColorDetector(config)
+	if err != nil {
+		log.Fatalf("Failed to initialize camera: %v", err)
+	}
+	globalDetector = detector
+	defer globalDetector.Close()
+
+	log.Println("Camera initialized successfully")
 
 	// Create HTTP server
 	// Serve static files from the "static" directory
@@ -111,34 +148,26 @@ func main() {
 			activeTracker = nil
 		}
 
-		// Create color tracker config
-		config := lib.DefaultColorTrackerConfig()
-
-		// Set color range based on requested color
+		// Update the detector's color configuration
+		detectorMutex.Lock()
 		switch colorName {
 		case "red":
-			// Red is special in HSV as it wraps around
-			config.DetectorConfig.LowerHSVBound = gocv.NewScalar(0, 100, 100, 0)
-			config.DetectorConfig.UpperHSVBound = gocv.NewScalar(10, 255, 255, 0)
+			globalDetector.UpdateColorRange(gocv.NewScalar(0, 100, 100, 0), gocv.NewScalar(10, 255, 255, 0))
 		case "blue":
-			config.DetectorConfig.LowerHSVBound = gocv.NewScalar(98, 190, 190, 0)
-			config.DetectorConfig.UpperHSVBound = gocv.NewScalar(115, 240, 250, 0)
+			globalDetector.UpdateColorRange(gocv.NewScalar(98, 190, 190, 0), gocv.NewScalar(115, 240, 250, 0))
 		case "yellow":
-			config.DetectorConfig.LowerHSVBound = gocv.NewScalar(20, 100, 100, 0)
-			config.DetectorConfig.UpperHSVBound = gocv.NewScalar(30, 255, 255, 0)
+			globalDetector.UpdateColorRange(gocv.NewScalar(20, 100, 100, 0), gocv.NewScalar(30, 255, 255, 0))
 		case "black":
-			config.DetectorConfig.LowerHSVBound = gocv.NewScalar(0, 0, 0, 0)
-			config.DetectorConfig.UpperHSVBound = gocv.NewScalar(180, 255, 50, 0)
+			globalDetector.UpdateColorRange(gocv.NewScalar(0, 0, 0, 0), gocv.NewScalar(180, 255, 50, 0))
 		case "lime":
-			config.DetectorConfig.LowerHSVBound = gocv.NewScalar(45, 100, 100, 0)
-			config.DetectorConfig.UpperHSVBound = gocv.NewScalar(65, 255, 255, 0)
+			globalDetector.UpdateColorRange(gocv.NewScalar(45, 100, 100, 0), gocv.NewScalar(65, 255, 255, 0))
 		default: // Green
-			config.DetectorConfig.LowerHSVBound = gocv.NewScalar(35, 100, 100, 0)
-			config.DetectorConfig.UpperHSVBound = gocv.NewScalar(50, 255, 255, 0)
+			globalDetector.UpdateColorRange(gocv.NewScalar(35, 100, 100, 0), gocv.NewScalar(50, 255, 255, 0))
 		}
+		detectorMutex.Unlock()
 
-		// Create the color tracker
-		tracker, err := lib.NewColorTracker(config, roomba)
+		// Create the color tracker with the existing detector
+		tracker, err := lib.NewColorTrackerWithDetector(globalDetector, roomba)
 		if err != nil {
 			log.Printf("Error creating color tracker: %v", err)
 			trackerMutex.Unlock()
@@ -165,10 +194,7 @@ func main() {
 			// First stop the tracker (which stops the robot)
 			activeTracker.Stop()
 
-			// Then close all resources
-			activeTracker.Close()
-
-			// Finally, set to nil
+			// Set to nil (don't close the detector as it's global)
 			activeTracker = nil
 		}
 		trackerMutex.Unlock()
@@ -213,7 +239,6 @@ func main() {
 		trackerMutex.Lock()
 		if activeTracker != nil {
 			activeTracker.Stop()
-			activeTracker.Close()
 			activeTracker = nil
 		}
 		trackerMutex.Unlock()
@@ -254,7 +279,7 @@ func main() {
 	// Start the HTTP server
 	port := 8080
 	log.Printf("Starting server on port %d...", port)
-	err := http.ListenAndServe(fmt.Sprintf(":%d", port), nil)
+	err = http.ListenAndServe(fmt.Sprintf(":%d", port), nil)
 	if err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
